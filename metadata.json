@@ -1,0 +1,6 @@
+{
+  "name": "AI Study Buddy",
+  "description": "An AI-powered Study Buddy that helps students organize subjects, set distraction-free timers, generate customized quiz pathways, and nurture a cute customizable pet with earned Study Coins.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
