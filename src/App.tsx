@@ -40,6 +40,12 @@ import {
   StudyLog
 } from './types';
 import { PetVisual } from './components/PetVisual';
+import { User as FirebaseUser } from 'firebase/auth';
+import { useAuth } from './contexts/AuthContext';
+import { Login } from './components/Login';
+import { useCloudLoad, useCloudSave } from './hooks/useCloudSync';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from './firebase';
 
 const SHOP_ITEMS: ShopItem[] = [
   // Foods
@@ -71,7 +77,12 @@ const DEFAULT_PETS: { type: PetType; name: string; desc: string; icon: string }[
   { type: 'penguin', name: 'Penny', desc: 'A hard-working, disciplined penguin ready to crush exam sessions.', icon: '🐧' }
 ];
 
-export default function App() {
+interface DashboardProps {
+  user: FirebaseUser;
+  onLogout: () => void;
+}
+
+function Dashboard({ user, onLogout }: DashboardProps) {
   // --- Persistent Storage State ---
   const [petStatus, setPetStatus] = useState<PetStatus>(() => {
     const saved = localStorage.getItem('study_buddy_pet');
@@ -186,6 +197,27 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('study_buddy_distract', JSON.stringify(distractApps));
   }, [distractApps]);
+
+  // --- Cloud Sync (Firestore) ---
+  // On sign-in, pull this user's saved data down from the cloud and hydrate
+  // local state with it (cloud is the source of truth once loaded).
+  const cloudReady = useCloudLoad(user.uid, (data) => {
+    if (data.petStatus) setPetStatus(data.petStatus);
+    if (data.purchasedItems) setPurchasedItems(data.purchasedItems);
+    if (typeof data.streak === 'number') setStreak(data.streak);
+    if (data.lastStudyDate !== undefined) setLastStudyDate(data.lastStudyDate);
+    if (data.studyPlan !== undefined) setStudyPlan(data.studyPlan);
+    if (data.studyLogs) setStudyLogs(data.studyLogs);
+    if (data.distractApps) setDistractApps(data.distractApps);
+  });
+
+  // Once the initial cloud load has resolved, keep pushing local changes
+  // back up to Firestore (debounced, so it doesn't fire on every keystroke).
+  useCloudSave(
+    user.uid,
+    { petStatus, purchasedItems, streak, lastStudyDate, studyPlan, studyLogs, distractApps },
+    cloudReady
+  );
 
   // --- Push Cute Feed Messages ---
   const pushFeedMessage = (msg: string) => {
@@ -601,7 +633,16 @@ export default function App() {
   const handleResetData = () => {
     if (confirm("Are you sure you want to reset all your study pet levels, coins, plans, and history? This cannot be undone.")) {
       localStorage.clear();
-      window.location.reload();
+      setDoc(doc(db, 'users', user.uid), {
+        petStatus: null,
+        purchasedItems: [],
+        streak: 1,
+        lastStudyDate: null,
+        studyPlan: null,
+        studyLogs: [],
+        distractApps: ['Instagram', 'YouTube', 'TikTok']
+      }).catch((err) => console.error('Failed to reset cloud data:', err))
+        .finally(() => window.location.reload());
     }
   };
 
@@ -690,6 +731,27 @@ export default function App() {
                 <span className="text-[10px] text-blue-500 block font-extrabold uppercase tracking-wider">CARROTS</span>
                 <span className="text-xs font-mono font-black text-blue-700">{petStatus.coins}</span>
               </div>
+            </div>
+
+            {/* Account / Logout */}
+            <div className="flex items-center gap-1.5 pl-1.5 ml-1 border-l border-slate-200">
+              <div
+                className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center overflow-hidden shrink-0"
+                title={user.displayName || user.email || 'Signed in'}
+              >
+                {user.photoURL ? (
+                  <img src={user.photoURL} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <User className="w-4 h-4 text-slate-500" />
+                )}
+              </div>
+              <button
+                onClick={onLogout}
+                title="Sign out"
+                className="p-2 rounded-xl hover:bg-slate-100 text-slate-500 hover:text-rose-600 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
             </div>
           </div>
         </div>
@@ -1694,4 +1756,29 @@ export default function App() {
 
     </div>
   );
+}
+
+// --- Auth Gate ---
+// Shows a loading screen while Firebase resolves the session, the Login
+// screen if nobody is signed in, or the Dashboard (the app above) once
+// a user is authenticated.
+export default function App() {
+  const { user, loading, logout } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin" />
+          <p className="text-sm text-slate-400 font-medium">Loading StudyBuddy AI…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Login />;
+  }
+
+  return <Dashboard user={user} onLogout={logout} />;
 }
